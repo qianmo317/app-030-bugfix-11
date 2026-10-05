@@ -195,7 +195,8 @@ export function specialRows(ctx: BaseContext): (string | number)[][] {
   const { rule, project } = ctx
   const rows: (string | number)[][] = [SPECIAL_HEADER]
   for (const person of project.persons) {
-    if (!person.specialFlag) continue
+    // 只导出有效人员的特殊单列，口径与汇总守恒一致（无效 / 重复行不计入）
+    if (!person.specialFlag || person.status !== 'active') continue
     rows.push([
       person.sourceRow ?? '',
       person.name,

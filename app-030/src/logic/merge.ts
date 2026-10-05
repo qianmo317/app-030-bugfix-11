@@ -82,7 +82,8 @@ export type SummaryTotals = {
 export type OrgUnitGroup = {
   orgUnit: string
   validCount: number
-  invalidCount: number
+  /** 无效行 + 重复排除行 */
+  excludedCount: number
   regularQty: number
   specialQty: number
   rows: SummaryRow[]
@@ -91,9 +92,16 @@ export type OrgUnitGroup = {
 export type BatchGroup = {
   batch: string
   validCount: number
+  excludedCount: number
   regularQty: number
   specialQty: number
   rows: SummaryRow[]
+}
+
+type GroupBucket = {
+  validCount: number
+  excludedCount: number
+  rows: Map<string, SummaryRow>
 }
 
 export type DistributionRow = {
@@ -158,12 +166,30 @@ function groupRows(rows: SummaryRow[]): SummaryRow[] {
   return [...rows].sort(compareRows)
 }
 
-/** 汇总 + 守恒校验。调用前请先 runMerge（结果幂等） */
+/**
+ * 汇总 + 守恒校验（全应用唯一的一套判定，归并页 / 汇总页 / 导出页共用）。
+ * 调用前请先 runMerge（结果幂等）。
+ *
+ * 有效行（status === 'active'）恰好分三类且互斥：
+ *   1. 特殊体型（specialFlag）→ specialMap 单列，永不进常规档；
+ *   2. 常规且有生效号型（result）→ regularMap；
+ *   3. 其余 → 未归并清单，使守恒不成立。
+ * 无效 / 重复行只计入排除数，不进任何号型档。
+ */
 export function buildSummary(project: Project, rule: SizeRule): Summary {
   const regularMap = new Map<string, SummaryRow>()
   const specialMap = new Map<string, SummaryRow>()
-  const orgMap = new Map<string, { persons: Person[]; rows: Map<string, SummaryRow> }>()
-  const batchMap = new Map<string, { persons: Person[]; rows: Map<string, SummaryRow> }>()
+  const orgMap = new Map<string, GroupBucket>()
+  const batchMap = new Map<string, GroupBucket>()
+
+  const bucketOf = (map: Map<string, GroupBucket>, key: string): GroupBucket => {
+    let bucket = map.get(key)
+    if (!bucket) {
+      bucket = { validCount: 0, excludedCount: 0, rows: new Map() }
+      map.set(key, bucket)
+    }
+    return bucket
+  }
 
   let invalidRows = 0
   let duplicateRows = 0
@@ -171,37 +197,51 @@ export function buildSummary(project: Project, rule: SizeRule): Summary {
   let overrideCount = 0
   let pendingConfirmCount = 0
   let specialPersonCount = 0
+  let regularResolvedCount = 0
   const unmerged: SummaryDiff[] = []
 
   for (const person of project.persons) {
-    if (person.status === 'invalid') invalidRows += 1
-    else if (person.status === 'duplicate') duplicateRows += 1
-    else validRows += 1
-
     const orgKey = person.orgUnit || '未填班级/车间'
     const batchKey = person.batch || '未分批'
-    if (!orgMap.has(orgKey)) orgMap.set(orgKey, { persons: [], rows: new Map() })
-    if (!batchMap.has(batchKey)) batchMap.set(batchKey, { persons: [], rows: new Map() })
-    orgMap.get(orgKey)!.persons.push(person)
-    batchMap.get(batchKey)!.persons.push(person)
+    const orgBucket = bucketOf(orgMap, orgKey)
+    const batchBucket = bucketOf(batchMap, batchKey)
 
     if (person.anomaly.length > 0) pendingConfirmCount += 1
 
-    if (person.status !== 'active') continue
+    // 无效 / 重复：只计排除数，不归任何档、不进未归并清单
+    if (person.status !== 'active') {
+      if (person.status === 'invalid') invalidRows += 1
+      else if (person.status === 'duplicate') duplicateRows += 1
+      orgBucket.excludedCount += 1
+      batchBucket.excludedCount += 1
+      continue
+    }
+
+    validRows += 1
+    orgBucket.validCount += 1
+    batchBucket.validCount += 1
+
     if (person.result?.manualOverride) overrideCount += 1
 
+    // 1) 特殊体型：单独列入定制清单，绝不混入常规档（即使能按规则算出号型）
     if (person.specialFlag) {
-      accumulate(regularMap, person.result?.sizeCode ?? person.specialFlag, person.gender, false)
+      specialPersonCount += 1
+      accumulate(specialMap, person.specialFlag, person.gender, true)
+      accumulate(orgBucket.rows, person.specialFlag, person.gender, true)
+      accumulate(batchBucket.rows, person.specialFlag, person.gender, true)
       continue
     }
 
+    // 2) 常规且有生效号型（规则归并或人工覆写）
     if (person.result) {
+      if (!person.result.manualOverride) regularResolvedCount += 1
       accumulate(regularMap, person.result.sizeCode, person.gender, false)
-      accumulate(orgMap.get(orgKey)!.rows, person.result.sizeCode, person.gender, false)
-      accumulate(batchMap.get(batchKey)!.rows, person.result.sizeCode, person.gender, false)
+      accumulate(orgBucket.rows, person.result.sizeCode, person.gender, false)
+      accumulate(batchBucket.rows, person.result.sizeCode, person.gender, false)
       continue
     }
 
+    // 3) 有效但没有任何号型 → 未归并（胸腰差落不进任何一档、数据不完整等）
     const reasons: string[] = []
     if (person.anomaly.includes('diff_out_of_range')) {
       reasons.push('胸腰差不在型别区间内，未自动归并')
@@ -227,26 +267,26 @@ export function buildSummary(project: Project, rule: SizeRule): Summary {
   const accountedQty = regularQty + specialQty
 
   const byOrgUnit: OrgUnitGroup[] = [...orgMap.entries()]
-    .map(([orgUnit, group]) => {
-      const rows = groupRows([...group.rows.values()])
+    .map(([orgUnit, bucket]) => {
+      const rows = groupRows([...bucket.rows.values()])
       return {
         orgUnit,
-        validCount: group.persons.length,
-        invalidCount: 0,
-        regularQty: group.persons.length,
-        specialQty: 0,
+        validCount: bucket.validCount,
+        excludedCount: bucket.excludedCount,
+        regularQty: rows.filter((row) => !row.isSpecial).reduce((sum, row) => sum + row.qty, 0),
+        specialQty: rows.filter((row) => row.isSpecial).reduce((sum, row) => sum + row.qty, 0),
         rows
       }
     })
     .sort((a, b) => a.orgUnit.localeCompare(b.orgUnit, 'zh-Hans-CN'))
 
   const byBatch: BatchGroup[] = [...batchMap.entries()]
-    .map(([batch, group]) => {
-      const active = group.persons.filter((person) => person.status === 'active')
-      const rows = groupRows([...group.rows.values()])
+    .map(([batch, bucket]) => {
+      const rows = groupRows([...bucket.rows.values()])
       return {
         batch,
-        validCount: active.length,
+        validCount: bucket.validCount,
+        excludedCount: bucket.excludedCount,
         regularQty: rows.filter((row) => !row.isSpecial).reduce((sum, row) => sum + row.qty, 0),
         specialQty: rows.filter((row) => row.isSpecial).reduce((sum, row) => sum + row.qty, 0),
         rows
@@ -269,6 +309,9 @@ export function buildSummary(project: Project, rule: SizeRule): Summary {
       }
     })
 
+  // 守恒：常规 + 特殊 = 有效人数；存在未归并行时一律不通过（导出按钮以此为唯一依据）
+  const conserved = unmerged.length === 0 && accountedQty === validRows
+
   return {
     ruleVersion: rule.version,
     regularRows,
@@ -283,14 +326,14 @@ export function buildSummary(project: Project, rule: SizeRule): Summary {
       specialQty,
       accountedQty,
       overrideCount,
-      ruleResolvedCount: validRows - overrideCount,
+      ruleResolvedCount: regularResolvedCount,
       pendingConfirmCount,
       specialPersonCount
     },
     byOrgUnit,
     byBatch,
     unmerged,
-    conserved: true,
+    conserved,
     distribution
   }
 }

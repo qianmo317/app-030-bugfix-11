@@ -200,7 +200,7 @@ function exportStockAdvice(): void {
               <tr>
                 <td>{{ group.orgUnit }}</td>
                 <td class="num">{{ group.validCount }}</td>
-                <td class="num">{{ group.invalidCount }}</td>
+                <td class="num">{{ group.excludedCount }}</td>
                 <td class="num">{{ group.regularQty }}</td>
                 <td class="num">{{ group.specialQty }}</td>
                 <td class="num"><b>{{ group.regularQty + group.specialQty }}</b></td>
@@ -240,6 +240,7 @@ function exportStockAdvice(): void {
             <tr>
               <th>批次</th>
               <th class="num">有效人数</th>
+              <th class="num">无效/排除</th>
               <th class="num">常规档</th>
               <th class="num">特殊单列</th>
               <th class="num">小计</th>
@@ -249,6 +250,7 @@ function exportStockAdvice(): void {
             <tr v-for="group in summary.byBatch" :key="group.batch">
               <td>{{ group.batch }}</td>
               <td class="num">{{ group.validCount }}</td>
+              <td class="num">{{ group.excludedCount }}</td>
               <td class="num">{{ group.regularQty }}</td>
               <td class="num">{{ group.specialQty }}</td>
               <td class="num">{{ group.regularQty + group.specialQty }}</td>
@@ -256,6 +258,7 @@ function exportStockAdvice(): void {
             <tr class="row-subtotal">
               <td>合计</td>
               <td class="num">{{ summary.totals.validRows }}</td>
+              <td class="num">{{ summary.totals.invalidRows + summary.totals.duplicateRows }}</td>
               <td class="num">{{ summary.totals.regularQty }}</td>
               <td class="num">{{ summary.totals.specialQty }}</td>
               <td class="num">{{ totalQty }}</td>

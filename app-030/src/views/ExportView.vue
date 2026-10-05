@@ -118,6 +118,11 @@ async function printPreview(): Promise<void> {
 }
 
 const genderText = (gender: string): string => (gender === 'male' ? '男' : '女')
+
+/** 特殊体型清单：只列有效（active）的特殊体型人员，口径与汇总的 specialPersonCount 一致 */
+const activeSpecialPersons = computed(() =>
+  (project.value?.persons ?? []).filter((person) => person.specialFlag && person.status === 'active')
+)
 </script>
 
 <template>
@@ -134,8 +139,46 @@ const genderText = (gender: string): string => (gender === 'male' ? '男' : '女
     </div>
 
     <div v-if="blocked" class="card card-accent-danger no-print">
+      <div class="card-head">
+        <h2>守恒不通过 · 下单表按钮已禁用</h2>
+        <div class="spacer"></div>
+        <span class="badge badge-danger">{{ summary.unmerged.length }} 行未归并</span>
+      </div>
       <div class="card-body">
         <p class="notice notice-error">{{ conservationText(summary) }}</p>
+        <p class="hint">
+          常规 {{ summary.totals.regularQty }} + 特殊 {{ summary.totals.specialQty }} = {{ summary.totals.accountedQty }}
+          ，不等于有效人数 {{ summary.totals.validRows }}。请先处理下表中的未归并行，守恒通过后下单汇总表按钮才会开放。
+        </p>
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th class="num">行号</th>
+                <th>姓名</th>
+                <th>班级/车间</th>
+                <th>未归并原因</th>
+                <th>跳转处理</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="diff in summary.unmerged" :key="diff.personId">
+                <td class="num">{{ diff.sourceRow ?? '—' }}</td>
+                <td>{{ diff.name }}</td>
+                <td>{{ diff.orgUnit || '—' }}</td>
+                <td>{{ diff.reason }}</td>
+                <td>
+                  <RouterLink
+                    class="clickable"
+                    :to="{ path: `/merge/${project.id}`, query: diff.sourceRow ? { row: String(diff.sourceRow) } : {} }"
+                  >
+                    回归并页处理
+                  </RouterLink>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
 
@@ -260,7 +303,7 @@ const genderText = (gender: string): string => (gender === 'male' ? '男' : '女
             </tr>
           </thead>
           <tbody>
-            <tr v-for="person in project.persons.filter((item) => item.specialFlag)" :key="person.id">
+            <tr v-for="person in activeSpecialPersons" :key="person.id">
               <td class="num">{{ person.sourceRow ?? '—' }}</td>
               <td>{{ person.name }}</td>
               <td>{{ genderText(person.gender) }}</td>
