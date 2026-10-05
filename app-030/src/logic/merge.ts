@@ -191,7 +191,11 @@ export function buildSummary(project: Project, rule: SizeRule): Summary {
     if (person.result?.manualOverride) overrideCount += 1
 
     if (person.specialFlag) {
-      accumulate(regularMap, person.result?.sizeCode ?? person.specialFlag, person.gender, false)
+      // 特殊体型单列：进 specialMap（key 为特殊标记码），同时计入班级/批次小计，绝不混入常规档
+      specialPersonCount += 1
+      accumulate(specialMap, person.specialFlag, person.gender, true)
+      accumulate(orgMap.get(orgKey)!.rows, person.specialFlag, person.gender, true)
+      accumulate(batchMap.get(batchKey)!.rows, person.specialFlag, person.gender, true)
       continue
     }
 
@@ -229,12 +233,13 @@ export function buildSummary(project: Project, rule: SizeRule): Summary {
   const byOrgUnit: OrgUnitGroup[] = [...orgMap.entries()]
     .map(([orgUnit, group]) => {
       const rows = groupRows([...group.rows.values()])
+      const validCount = group.persons.filter((person) => person.status === 'active').length
       return {
         orgUnit,
-        validCount: group.persons.length,
-        invalidCount: 0,
-        regularQty: group.persons.length,
-        specialQty: 0,
+        validCount,
+        invalidCount: group.persons.length - validCount,
+        regularQty: rows.filter((row) => !row.isSpecial).reduce((sum, row) => sum + row.qty, 0),
+        specialQty: rows.filter((row) => row.isSpecial).reduce((sum, row) => sum + row.qty, 0),
         rows
       }
     })
@@ -269,6 +274,11 @@ export function buildSummary(project: Project, rule: SizeRule): Summary {
       }
     })
 
+  // 守恒判定（规格书 §4.5 / §8）：Σ常规档 + Σ特殊单列 === 有效人数。
+  // 每个有效行要么计入常规/特殊，要么进入 unmerged，因此等式不成立 ⟺ 存在未归并行。
+  // 三个页面与导出全部以此为准，不允许各自再判一次。
+  const conserved = accountedQty === validRows && unmerged.length === 0
+
   return {
     ruleVersion: rule.version,
     regularRows,
@@ -290,7 +300,7 @@ export function buildSummary(project: Project, rule: SizeRule): Summary {
     byOrgUnit,
     byBatch,
     unmerged,
-    conserved: true,
+    conserved,
     distribution
   }
 }

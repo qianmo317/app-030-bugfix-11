@@ -134,8 +134,47 @@ const genderText = (gender: string): string => (gender === 'male' ? '男' : '女
     </div>
 
     <div v-if="blocked" class="card card-accent-danger no-print">
+      <div class="card-head">
+        <h2>守恒校验未通过 —— 下单表导出已禁用</h2>
+        <div class="spacer"></div>
+        <span class="badge badge-danger">{{ summary.unmerged.length }} 行未归并</span>
+      </div>
       <div class="card-body">
         <p class="notice notice-error">{{ conservationText(summary) }}</p>
+        <p class="hint" style="margin-top: 8px">
+          以下 {{ summary.unmerged.length }} 行有效量体数据没有归并到任何号型档，工厂核对人数会少
+          {{ summary.totals.validRows - summary.totals.accountedQty }} 人。请逐行处理（覆写号型 / 标记特殊体型 /
+          判为无效行）后，守恒等式成立才能导出下单表。
+        </p>
+        <div class="table-wrap" style="margin-top: 8px">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th class="num">行号</th>
+                <th>姓名</th>
+                <th>班级/车间</th>
+                <th>未归并原因</th>
+                <th>跳转处理</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="diff in summary.unmerged" :key="diff.personId">
+                <td class="num">{{ diff.sourceRow ?? '—' }}</td>
+                <td>{{ diff.name }}</td>
+                <td>{{ diff.orgUnit || '—' }}</td>
+                <td>{{ diff.reason }}</td>
+                <td>
+                  <RouterLink
+                    class="clickable"
+                    :to="{ path: `/merge/${project.id}`, query: diff.sourceRow ? { row: String(diff.sourceRow) } : {} }"
+                  >
+                    跳到归并页处理
+                  </RouterLink>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
 
